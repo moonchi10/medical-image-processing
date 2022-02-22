@@ -1,0 +1,331 @@
+
+import SimpleITK as sitk
+import pydicom
+import glob
+import re
+import pandas as pd
+import cv2
+from skimage import io
+import os
+import numpy as np
+import math
+import tensorflow as tf
+
+def mkdir(path):
+    #判斷目錄是否存在
+    #存在：True
+    #不存在：False
+    folder = os.path.exists(path)
+
+    #判斷結果
+    if not folder:
+        #如果不存在，則建立新目錄
+        os.makedirs(path)
+        print('-----建立成功-----')
+
+    else:
+        #如果目錄已存在，則不建立，提示目錄已存在
+        print(path+'目錄已存在')
+def SortImg2Array(Path,pic_formats= [".bmp", ".pic", ".dcm", ".gipl", ".jpg", ".jpeg", ".tif", ".tiff", ".lsm", ".mnc", ".mrc",
+                           ".mha", ".nia", ".nii", ".img", ".hdr", ".nrrd", ".png", ".vtk"]):
+    filelist = []
+
+    for root, dirs, files in os.walk(Path):
+        for f in files:
+                for i in pic_formats:
+                    if i in f:
+                        num = re.sub("\D", "", f)
+                        f=str(Path)+str(f)
+                        filelist.append((int(num),f))
+    filelist_sort = sorted(filelist, key=lambda number: number[0])
+
+    return filelist_sort
+
+
+def FolderPatientID(folder):
+
+    reader = sitk.ImageSeriesReader()
+    series_ids = reader.GetGDCMSeriesIDs(folder)
+    if len(series_ids) > 1:
+        id_list = str(series_ids).split(',')
+    else:
+        id_list = []
+        id_list.append(str(series_ids))
+        id_list[0] = id_list[0].replace(",", "")
+
+
+    get_id_len = len(id_list)
+
+    dicom_filenames = []
+    for i in range(0, get_id_len):
+        id_list[i] = id_list[i].replace("(", "")
+        id_list[i] = id_list[i].replace(")", "")
+        id_list[i] = id_list[i].replace("'", "")
+        id_list[i] = id_list[i].replace(" ", "")
+        dicom_filenames = dicom_filenames + list(reader.GetGDCMSeriesFileNames(folder, id_list[i]))
+
+    pic_len = len(dicom_filenames)
+    # print(id_list)
+    # print(*dicom_filenames, sep="\n")
+
+    patient_id = [[0] * 2 for j in range(pic_len)]
+
+    for k in range(get_id_len):
+        for l in range(pic_len):
+            image= sitk.ReadImage(dicom_filenames[l])
+            dcm = pydicom.dcmread(dicom_filenames[l])
+            txtdcm = str(dcm)
+            if id_list[k] in txtdcm:
+                patient_id[l][0]=id_list[k]
+            patient_id[l][1]=dicom_filenames[l]
+
+
+
+
+    # print(*patient_data,sep="\n")
+    return patient_id
+
+
+def get_data_list(dataset,file_path,label=None,num_label=None):
+    if label:
+        num_each_kind=dataset[label].value_counts().sort_index(ascending=True)
+        all_id_list = []
+        label_id_dataset=[[]for _ in range(num_label)]
+        counter=0
+        for num in num_each_kind:
+            num_id_each_kind = [[]for _ in range(num)]
+            label_id_dataset[counter]=num_id_each_kind
+            counter = counter + 1
+        label_id_list = [[] for _ in range(num_label)]
+
+
+        for j in range(num_label):
+            counter_id_ecah_kind = 0
+            for i in range(len(dataset['ID'])):  # 117
+                if dataset[label][i] == j:  # 117
+                    type_id = dataset['ID'][i]  # 117
+                    files = sorted(glob.glob(f"{data_directory}/{file_path}/{type_id}/*.png"),
+                                   key=lambda var: [int(x) if x.isdigit() else x for x in re.findall(r'[^0-9]|[0-9]+', var)])
+                    all_id_list.append((type_id))
+                    label_id_list[j].append(type_id)
+                    label_id_dataset[j][counter_id_ecah_kind].append(files)
+                    label_id_dataset[j][counter_id_ecah_kind].append(type_id)
+                    label_id_dataset[j][counter_id_ecah_kind]=label_id_dataset[j][counter_id_ecah_kind][::-1]
+                    counter_id_ecah_kind=counter_id_ecah_kind+1
+
+        return label_id_dataset,label_id_list
+    else:
+        all_id_list=[]
+        label_id_dataset = [[] for _ in range(len(dataset['ID']))]
+        for i in range(len(dataset['ID'])):  # 117
+            each_id = dataset['ID'][i]
+            files = sorted(glob.glob(f"{data_directory}/{file_path}/{each_id}/*.png"),
+                           key=lambda var: [int(x) if x.isdigit() else x for x in re.findall(r'[^0-9]|[0-9]+', var)])
+            all_id_list.append((each_id))
+            label_id_dataset[i].append(all_id_list[i])
+            label_id_dataset[i].append(files)
+        return label_id_dataset
+
+
+SIZE = 512
+NUM_IMAGES = 120
+data_directory = "C:/Users/Yi-Hsin Hung/ChangGung/mypaper/meeting/mywork/ENS_CT_KERAS/"
+all_data_dic = (pd.read_csv("C:/Users/Yi-Hsin Hung/ChangGung/mypaper/meeting/mywork/keras/ENSsample117reshape.csv")).to_dict()
+all_data=pd.read_csv("C:/Users/Yi-Hsin Hung/ChangGung/mypaper/meeting/mywork/keras/ENSsample117reshape.csv")
+file_path="all_small_3d"
+classifying_type="sleepDys"
+checkpoint="sleepDys_classification_checkpoint_1018.h5"
+model_name='my_sleepDys_117modelsmall_20211018.h5'
+
+from scipy.ndimage import zoom
+def load_and_do_reshape(dataset,num_label=None,len_id_label=None):
+    if num_label:
+        label = [[] for _ in range(num_label)]
+        for j in range(num_label):
+            for i in range(len_id_label[j]):
+                num = len(dataset[j][i])
+                multiple_num = NUM_IMAGES / num
+                imglist = []
+
+                for f in dataset[j][i]:
+                    img = cv2.imread(f, cv2.IMREAD_GRAYSCALE)
+                    imglist.append(img)
+                array_img = np.array(imglist)
+                new_array = zoom(array_img, (multiple_num, 1, 1))
+                label[j].append(new_array)
+        return label
+    else:
+        len_id=len(dataset)
+        data_list = [[] for _ in range(len_id)]
+        all_id_list = []
+        for num in range(len(dataset)):#人數
+            all_id_list.append(dataset[num][0])
+            len_each_dataset=len(dataset[num][1])#張數
+            multiple_num = NUM_IMAGES / len_each_dataset
+            imglist = []
+            for f in dataset[num][1]:
+                img = cv2.imread(f, cv2.IMREAD_GRAYSCALE)
+                imglist.append(img)
+            array_img = np.array(imglist)
+            new_array = zoom(array_img, (multiple_num, 1, 1))
+            data_list[num].append(new_array)
+        return data_list,all_id_list
+
+def convert_to_array(dataset):#出來同層數
+    array_list=[]
+    for num in range(len(dataset)):
+        for each_img in range(len(dataset[num])):
+            arr=np.array(dataset[num][each_img])
+            array_list.append(arr)
+    array_dataset=np.array(array_list)
+    return array_dataset
+
+def images_3d(dataset,num_imgs=120,label_kind=None):
+    if label_kind:
+        len_id=len(dataset)#第幾個人
+        img= np.array(dataset[label_kind])
+        img3d = [[] for _ in range(len_id)]
+
+        for num_id in range(0,len_id):
+            for i in range(num_imgs):
+                num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(img[i], connectivity=8)
+                output = np.zeros((img.shape[2], img.shape[1]), np.uint8)
+
+                # 標籤1是背景
+                if num_labels > 1:
+                    for j in range(2, num_labels):
+                        mask = labels == j
+                        output[mask] = 255
+                    img3d[num_id].append(output)
+                else:
+                    pass
+
+        img3d = np.array(img3d)
+        return img3d
+    else:
+        len_id = len(dataset)  # 第幾個人
+        img3d = [[] for _ in range(len_id)]
+        for num_id in range(len_id):
+            for num in range(num_imgs):
+                num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(dataset[num_id][num], connectivity=8)
+                output = np.zeros((dataset[num_id].shape[2], dataset[num_id].shape[1]), np.uint8)
+
+                # 標籤1是背景
+                if num_labels > 1:
+                    for j in range(2, num_labels):
+                        mask = labels == j
+                        output[mask] = 255
+                    img3d[num_id].append(output)
+                else:
+                    pass
+        img3d = np.array(img3d)
+        return img3d
+
+#for i in range(512):
+    #cv2.imwrite("C:/Users/Yi-Hsin Hung/ChangGung/mypaper/meeting/mywork/ENS_CT_KERAS/bone_window/new/"+f"{i}"+".png",data_512[0][i])
+
+def save_img(data,path,file_name,img_name=None):
+    if type(file_name)==list:
+        for x in range(len(data)):
+            os.mkdir(path+str(file_name[x]))
+            for num in range(len(data[x])):
+                io.imsave(path+str(file_name[x])+"/"+str(file_name[x])+"_"+str(num + 1) + '.png',data[x][num])
+    else:
+        for x in range(len(data)):
+            os.mkdir(path+file_name+"/"+str(x))
+            for num in range(len(data[x])):
+                io.imsave(path+file_name+"/"+str(x)+"/"+img_name+str(num + 1) + '.png',data[x][num])
+
+def load_img3d_to_list(dataset,label_kind):
+    img3d = [[] for _ in range(len(dataset[label_kind]))]#[[]*該種人數]
+    for num_id_each_kind in range(len(dataset[label_kind])):
+        img_list=[]
+        for f in dataset[label_kind][num_id_each_kind][1]:
+            img = cv2.imread(f, cv2.IMREAD_GRAYSCALE)
+            img_list.append(img)
+        img3d[num_id_each_kind].append(img_list)
+    img3d=convert_to_array(img3d)
+    return img3d
+
+def load_png(dataset,num_label=None,len_id_label=None):
+    if num_label:
+        label = [[] for _ in range(num_label)]
+        for j in range(num_label):
+            for i in range(len_id_label[j]):
+                imglist = []
+                for f in dataset[j][i]:
+                    img = cv2.imread(f, cv2.IMREAD_GRAYSCALE)
+                    imglist.append(img)
+                array_img = np.array(imglist)
+                label[j].append(array_img)
+        return label
+    else:
+        len_id=len(dataset)
+        data_list = [[] for _ in range(len_id)]
+        all_id_list = []
+        for num in range(len(dataset)):#人數
+            all_id_list.append(dataset[num][0])
+            imglist = []
+            for f in dataset[num][1]:
+                img = cv2.imread(f, cv2.IMREAD_GRAYSCALE)
+                imglist.append(img)
+            array_img = np.array(imglist)
+            data_list[num].append(array_img)
+        return data_list,all_id_list
+
+def add_zero_array(origin_array,num_goal):
+    num_top=int((num_goal-len(origin_array))/2)
+    num_bot=math.ceil((num_goal - len(origin_array)) / 2)
+    top_zero_array = np.zeros((num_top, 512, 512), dtype="uint8")
+    bot_zero_array = np.zeros((num_bot, 512, 512), dtype="uint8")
+    all_zero_array = np.vstack((top_zero_array,origin_array, bot_zero_array))
+    return all_zero_array
+
+def keras_model_memory_usage_in_bytes(model, *, batch_size: int):
+    """
+    Return the estimated memory usage of a given Keras model in bytes.
+    This includes the model weights and layers, but excludes the dataset.
+
+    The model shapes are multipled by the batch size, but the weights are not.
+
+    Args:
+        model: A Keras model.
+        batch_size: The batch size you intend to run the model with. If you
+            have already specified the batch size in the model itself, then
+            pass `1` as the argument here.
+    Returns:
+        An estimate of the Keras model's memory usage in bytes.
+
+    """
+    default_dtype = tf.keras.backend.floatx()
+    shapes_mem_count = 0
+    internal_model_mem_count = 0
+    for layer in model.layers:
+        if isinstance(layer, tf.keras.Model):
+            internal_model_mem_count += keras_model_memory_usage_in_bytes(
+                layer, batch_size=batch_size
+            )
+        single_layer_mem = tf.as_dtype(layer.dtype or default_dtype).size
+        out_shape = layer.output_shape
+        if isinstance(out_shape, list):
+            out_shape = out_shape[0]
+        for s in out_shape:
+            if s is None:
+                continue
+            single_layer_mem *= s
+        shapes_mem_count += single_layer_mem
+
+    trainable_count = sum(
+        [tf.keras.backend.count_params(p) for p in model.trainable_weights]
+    )
+    non_trainable_count = sum(
+        [tf.keras.backend.count_params(p) for p in model.non_trainable_weights]
+    )
+
+    total_memory = (
+        batch_size * shapes_mem_count
+        + internal_model_mem_count
+        + trainable_count
+        + non_trainable_count
+    )
+    return total_memory
