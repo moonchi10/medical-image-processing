@@ -1,0 +1,159 @@
+import cv2
+import pydicom as PD
+import SimpleITK as sitk
+import numpy as np
+from PIL import Image
+import matplotlib.pyplot as plt
+from matplotlib import cm
+import openpyxl
+# 設定 DICOM 影像序列檔案名稱,載入後設資料,載入私有後設資料,實際讀取影像內容,顯示影像ID、大小
+# path='D:/ChangGung/mypaper/meeting/mywork/testfile'
+
+def GetSeriesData(folder,num=0):
+    reader=sitk.ImageSeriesReader()
+    series_ids=list(reader.GetGDCMSeriesIDs(folder))
+    series_filename=list(reader.GetGDCMSeriesFileNames(folder,series_ids[num]))
+    reader.SetFileNames(series_filename)
+    reader.MetaDataDictionaryArrayUpdateOn()
+    reader.LoadPrivateTagsOn()
+    raw_image=reader.Execute()
+    size = raw_image.GetSize()
+    print('series_id : '+series_ids[num]+'\n'+"Image size: {} x {} x {}".format(size[0], size[1], size[2]))
+    # HU = Rescale Slope * X + Rescale Intercept.
+    # (0028,1052)Rescale Intercept (0028,1053)Rescale Slope
+    Rescale_Intercept = '0028|1052'
+    Rescale_Slope = '0028|1053'
+    intercept=float(reader.GetMetaData(0,Rescale_Intercept))
+    slope=float(reader.GetMetaData(0,Rescale_Slope))
+    if(reader.HasMetaDataKey(num,Rescale_Intercept)):
+        if(reader.HasMetaDataKey(num,Rescale_Slope)):
+            print('Rescale Intercept : '+str(intercept)+'\n'+'Rescale Slope : '+str(slope))
+        else:
+            print('no Rescale_Slope in patient data')
+    else:
+        print('no Rescale_Intercept in patient data')
+#
+# slice_num = 0
+# print(reader.GetMetaDataKeys(slice_num))
+# # 查看特定影像 slice 的後設資料值
+# tag = '0010|0010'
+# print(reader.GetMetaData(slice_num, tag))
+
+# Max=np.max(hu_image)
+# Min=np.min(hu_image)
+# window center = WC =亮度
+# window width = WW =對比度
+#Slice Thickness 表示z方向切片厚度
+    window_center=('0028|1050')
+    window_width=('0028|1051')
+    slice_thickness=('0018|0050')
+    wc=reader.GetMetaData(0,window_center)
+    ww=reader.GetMetaData(0,window_width)
+    st=reader.GetMetaData(0,slice_thickness)
+    wc=str(wc).split("\\")
+    ww=str(ww).split("\\")
+    wc=float(wc[0])
+    ww=float(ww[0])
+
+    print('Window Center : '+str(wc))
+    print('Window Width : '+str(ww))
+    print('Slice Thickness : '+str(st))
+    # print('Max Hu : '+str(Max))
+    # print('Min Hu : '+str(Min))
+    return raw_image,intercept,slope
+
+
+# 序列影像處理
+
+def Raw2Hu(raw_image,wcset,wwset,intercept,slope):
+    wcset=int(wcset)
+    wwset=int(wwset)
+    array_image = sitk.GetArrayFromImage(raw_image)
+    array_image = array_image.astype(np.int16)
+    len_series=len(array_image)
+    # print(array_image)
+    # 從DICOM文件中獲得的值是HU這個單位
+    # 某些掃描儀具有圓柱掃描邊界，但輸出圖像為方形
+    # 落在這些邊界之外的像素獲得固定值-2000，第一步是將這些值設置為0，當前對應於air
+    # 回到HU單位，乘以重新縮放斜率並添加截距
+    # array_image[array_image == -2000] = 0
+
+    if slope != 1:
+        array_image = slope * array_image.astype(np.float64)
+        array_image = array_image.astype(np.int16)
+        # print(array_image)
+    array_image += np.int16(intercept)
+    hu_image = np.array(array_image, dtype=np.int16)
+
+
+
+    # 處理window cneter與window width
+    for i in range(len_series):
+        image_win=hu_image[i]
+        img_min=wcset-wwset//2#無條件捨去
+        img_max=wcset+wwset//2
+        image_win[image_win<img_min]=img_min#小於框則為黑
+        image_win[image_win>img_max]=img_max#大於框則為白
+
+        # print(type(image_win))
+        # print(image_win.shape)
+
+        hu_image[i] = cv2.normalize(image_win, dst=None, alpha=-32768, beta=32768, norm_type=cv2.NORM_MINMAX)
+    return hu_image
+# 單張影像處理
+def GetDicData(dic_name):
+    reader = sitk.ReadImage(dic_name)
+    size = reader.GetSize()
+    print('Dic Name : ' + dic_name + '\n' + "Image size: {} x {} ".format(size[0], size[1]))
+    # HU = Rescale Slope * X + Rescale Intercept.
+    # (0028,1052)Rescale Intercept (0028,1053)Rescale Slope
+    Rescale_Intercept = '0028|1052'
+    Rescale_Slope = '0028|1053'
+    intercept = float(reader.GetMetaData(Rescale_Intercept))
+    slope = float(reader.GetMetaData(Rescale_Slope))
+    if (reader.HasMetaDataKey(Rescale_Intercept)):
+        if (reader.HasMetaDataKey(Rescale_Slope)):
+            print('Rescale Intercept : ' + str(intercept) + '\n' + 'Rescale Slope : ' + str(slope))
+        else:
+            print('no Rescale_Slope in patient data')
+    else:
+        print('no Rescale_Intercept in patient data')
+    window_center = ('0028|1050')
+    window_width = ('0028|1051')
+    slice_thickness = ('0018|0050')
+    wc = reader.GetMetaData(window_center)
+    ww = reader.GetMetaData(window_width)
+    st = reader.GetMetaData(slice_thickness)
+    wc = str(wc).split("\\")
+    ww = str(ww).split("\\")
+    wc = float(wc[0])
+    ww = float(ww[0])
+
+    print('Window Center : ' + str(wc))
+    print('Window Width : ' + str(ww))
+    print('Slice Thickness : ' + str(st))
+    # print('Max Hu : '+str(Max))
+    # print('Min Hu : '+str(Min))
+    return reader, intercept, slope
+
+
+
+def SaveXlsx(image_array,num,xlsx_name):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "NumPy_Arr"
+    for x in image_array[num]:
+        ws.append(x.tolist())
+    wb.save(filename=str(xlsx_name)+'xlsx')
+
+# #
+# wb = openpyxl.Workbook()
+# ws = wb.active
+# ws.title = "NumPy_Arr"
+# for x in img_scaled:
+#     ws.append(x.tolist())
+# wb1.save(filename='test2.xlsx')
+
+
+
+# hu_image
