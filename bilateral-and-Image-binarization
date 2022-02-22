@@ -1,0 +1,51 @@
+import DataPreProcessing
+import cv2
+from skimage import exposure,io,util,measure,morphology
+from skimage import img_as_ubyte
+from skimage.restoration import denoise_bilateral
+from skimage.morphology import ball, binary_closing
+from skimage.measure import label, regionprops
+import matplotlib as plt
+
+import numpy as np
+import scipy.misc
+from scipy import ndimage
+
+CTtype="232sample"
+fileid="XXXXX CT2"
+
+Path="C:/Users/Yi-Hsin Hung/ChangGung/mypaper/meeting/mywork/ENS_CT/"+fileid+"/"
+raw_image,intercept,slope=DataPreProcessing.GetSeriesData(Path)
+img=DataPreProcessing.Raw2Hu(raw_image,-800,1000,intercept,slope)
+
+nor=img
+#雙邊濾波 : 盡量保留邊界並去除雜訊
+nor_8u = img_as_ubyte(nor)
+bil_img=[]
+for i in range(nor_8u.shape[0]):
+
+    bil = nor_8u[i, :, :]
+    bil_img.append(cv2.bilateralFilter(bil,5,20,100,borderType=cv2.BORDER_CONSTANT))
+
+bil_img=np.array(bil_img)
+
+#影像二值化
+binary_img = []
+for l in range(bil_img.shape[0]):
+    input_img = bil_img[l,:,:]  #Grey images. For color add another dim.
+    #thresh = threshold_otsu(input_img)
+    thresh = 150
+    binary = input_img > thresh
+    binary_img.append(binary)
+    # 使用高斯濾波並將其ksize設為(1,1)
+    # 將其鄰域高1寬1的影像列入考量
+    bin_img = img_as_ubyte(binary_img)
+    gaus_img = cv2.GaussianBlur(bin_img, (1, 1), 0, 0)
+    reverse_gaus_img = 255 - gaus_img
+    reverse_gaus_img[reverse_gaus_img < 0] = 255
+
+for num in range(len(bil_img)):
+    reverse_gaus_img[num]=ndimage.rotate(reverse_gaus_img[num],180)
+    io.imsave('C:/Users/Yi-Hsin Hung/ChangGung/mypaper/meeting/mywork/ENS_CT/test/'+'reverse_gaus_img' + str(num + 1) + '.png', reverse_gaus_img[num])
+    # io.imsave('reverse_gaus_img' + str(num + 1) + '.png', reverse_gaus_img[num])
+    
